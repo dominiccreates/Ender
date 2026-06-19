@@ -2479,13 +2479,14 @@ Tip: I automatically detect and install npm packages from your code imports (lik
           '4. Open http://localhost:5173',
           'system'
         );
+        toast.success('Download started');
+        setLoading(false);
       } else {
-        throw new Error(data.error);
+        addChatMessage(`Failed to create ZIP: ${data.error || 'unknown error'}`, 'system');
       }
+      setLoading(false);
     } catch (error: any) {
-      log(`Failed to create zip: ${error.message}`, 'error');
       addChatMessage(`Failed to create ZIP: ${error.message}`, 'system');
-    } finally {
       setLoading(false);
     }
   };

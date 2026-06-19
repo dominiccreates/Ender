@@ -2,7 +2,7 @@ import { nanoid } from 'nanoid'
 import { getDb } from '@/lib/mongo'
 
 type User = { id: string; email: string; passwordHash: string; createdAt: number }
-type Session = { id: string; userId: string; createdAt: number; expiresAt: number }
+type Session = { id: string; userId: string; createdAt: number; expiresAt: Date }
 type Project = { id: string; userId: string; sandboxId: string; url: string; name?: string; createdAt: number; updatedAt: number }
 
 export async function getUserByEmail(email: string): Promise<User | undefined> {
@@ -30,7 +30,7 @@ export async function createSession(userId: string, ttlHours = 72): Promise<Sess
     id: nanoid(),
     userId,
     createdAt: Date.now(),
-    expiresAt: Date.now() + ttlHours * 60 * 60 * 1000
+    expiresAt: new Date(Date.now() + ttlHours * 60 * 60 * 1000)
   }
   await db.collection<Session>('sessions').insertOne({ _id: session.id as any, ...session } as any)
   return session
@@ -39,7 +39,7 @@ export async function createSession(userId: string, ttlHours = 72): Promise<Sess
 export async function getSession(id: string): Promise<Session | undefined> {
   const db = await getDb()
   const doc = await db.collection<Session>('sessions').findOne({ id })
-  if (!doc || doc.expiresAt <= Date.now()) return undefined
+  if (!doc || doc.expiresAt.getTime() <= Date.now()) return undefined
   return doc
 }
 
