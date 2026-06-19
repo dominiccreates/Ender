@@ -1,4 +1,6 @@
 import { SandboxProvider } from './types';
+import { EventEmitter } from 'events';
+import { appConfig } from '@/config/app.config';
 import { SandboxFactory } from './factory';
 
 interface SandboxInfo {
@@ -10,6 +12,9 @@ interface SandboxInfo {
 
 class SandboxManager {
   private sandboxes: Map<string, SandboxInfo> = new Map();
+  private timeoutWatchers: Map<string, NodeJS.Timeout> = new Map();
+  private timeoutWarningCallbacks: ((sandboxId: string, remainingMs: number) => void)[] = [];
+  private warningThresholdMs = 2 * 60 * 1000; // 2 minutes
   private activeSandboxId: string | null = null;
 
   /**
@@ -53,6 +58,46 @@ class SandboxManager {
     }
   }
 
+  private getTimeoutMs(provider: SandboxProvider): number {
+    const name = provider.constructor.name;
+    if (name === 'E2BProvider') return appConfig.e2b.timeoutMs;
+    if (name === 'VercelProvider') return appConfig.vercelSandbox.timeoutMs;
+    return 0;
+  }
+
+  private emitTimeoutWarning(sandboxId: string, remainingMs: number): void {
+    this.timeoutWarningCallbacks.forEach(cb => {
+      try { cb(sandboxId, remainingMs); } catch (e) { console.error('Timeout warning callback error', e); }
+    });
+  }
+
+  private scheduleWarning(sandboxId: string, timeoutMs: number): void {
+    const warningTime = timeoutMs - this.warningThresholdMs;
+    if (warningTime <= 0) return;
+    const now = Date.now();
+    const info = this.sandboxes.get(sandboxId);
+    if (!info) return;
+    const elapsed = now - info.createdAt.getTime();
+    const remaining = timeoutMs - elapsed;
+    const delay = remaining - this.warningThresholdMs;
+    if (delay <= 0) {
+      this.emitTimeoutWarning(sandboxId, Math.max(remaining, 0));
+      return;
+    }
+    const watcher = setTimeout(() => {
+      this.emitTimeoutWarning(sandboxId, this.warningThresholdMs);
+    }, delay);
+    this.timeoutWatchers.set(sandboxId, watcher);
+  }
+
+  private startTimeoutWatcher(sandboxId: string): void {
+    const info = this.sandboxes.get(sandboxId);
+    if (!info) return;
+    const timeoutMs = this.getTimeoutMs(info.provider);
+    if (!timeoutMs) return;
+    this.scheduleWarning(sandboxId, timeoutMs);
+  }
+
   /**
    * Register a new sandbox
    */
@@ -64,6 +109,7 @@ class SandboxManager {
       lastAccessed: new Date()
     });
     this.activeSandboxId = sandboxId;
+    this.startTimeoutWatcher(sandboxId);
   }
 
   /**
@@ -118,7 +164,12 @@ class SandboxManager {
         console.error(`[SandboxManager] Error terminating sandbox ${sandboxId}:`, error);
       }
       this.sandboxes.delete(sandboxId);
-      
+      // Clear timeout watcher if any
+      const watcher = this.timeoutWatchers.get(sandboxId);
+      if (watcher) {
+        clearTimeout(watcher);
+        this.timeoutWatchers.delete(sandboxId);
+      }
       if (this.activeSandboxId === sandboxId) {
         this.activeSandboxId = null;
       }
@@ -129,14 +180,16 @@ class SandboxManager {
    * Terminate all sandboxes
    */
   async terminateAll(): Promise<void> {
-    const promises = Array.from(this.sandboxes.values()).map(sandbox => 
-      sandbox.provider.terminate().catch(err => 
+    const promises = Array.from(this.sandboxes.values()).map(sandbox =>
+      sandbox.provider.terminate().catch(err =>
         console.error(`[SandboxManager] Error terminating sandbox ${sandbox.sandboxId}:`, err)
       )
     );
-    
     await Promise.all(promises);
     this.sandboxes.clear();
+    // Clear all watchers
+    this.timeoutWatchers.forEach(watcher => clearTimeout(watcher));
+    this.timeoutWatchers.clear();
     this.activeSandboxId = null;
   }
 
@@ -144,6 +197,8 @@ class SandboxManager {
    * Clean up old sandboxes (older than maxAge milliseconds)
    */
   async cleanup(maxAge: number = 3600000): Promise<void> {
+    // Also clear any timeout watchers for sandboxes being terminated
+
     const now = new Date();
     const toDelete: string[] = [];
     
@@ -155,8 +210,8 @@ class SandboxManager {
     }
     
     for (const id of toDelete) {
-      await this.terminateSandbox(id);
-    }
+        await this.terminateSandbox(id);
+      }
   }
 }
 
