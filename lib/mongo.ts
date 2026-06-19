@@ -25,6 +25,7 @@ export async function getDb(): Promise<Db> {
 
   // Ensure indexes only once per application lifespan
   if (!global._mongoIndexesCreated) {
+    // Ensure TTL index on 'expiresAt' to auto-delete expired sessions
     await Promise.all([
       db.collection('users').createIndex({ email: 1 }, { unique: true }),
       db.collection('sessions').createIndex({ id: 1 }, { unique: true }),
@@ -36,4 +37,3 @@ export async function getDb(): Promise<Db> {
 
   return db
 }
-
